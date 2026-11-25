@@ -1,0 +1,15 @@
+# Local development services. Production: see docs/DEPLOYMENT.md
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: easyvisa
+      POSTGRES_PASSWORD: easyvisa
+      POSTGRES_DB: easyvisa
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:

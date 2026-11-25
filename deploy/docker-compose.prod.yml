@@ -1,0 +1,70 @@
+# Production stack: Postgres + app + Caddy (automatic HTTPS) + nightly backups.
+# Usage on the server:  cp .env.production.example .env.production  → edit → docker compose -f deploy/docker-compose.prod.yml up -d
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easyvisa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-easyvisa}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-easyvisa}']
+      interval: 10s
+      retries: 6
+
+  app:
+    build:
+      context: ..
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+    restart: unless-stopped
+    env_file: ../.env.production
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-easyvisa}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-easyvisa}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - media:/app/media
+      - private_uploads:/app/private-uploads
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    depends_on: [app]
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-easyvisa}
+      POSTGRES_DB: ${POSTGRES_DB:-easyvisa}
+    volumes:
+      - ./backups:/backups
+      - private_uploads:/data/private-uploads:ro
+      - media:/data/media:ro
+      - ./backup.sh:/backup.sh:ro
+    entrypoint: ['/bin/sh', '-c', 'while true; do sh /backup.sh; sleep 86400; done']
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  media:
+  private_uploads:
+  caddy_data:
+  caddy_config:
