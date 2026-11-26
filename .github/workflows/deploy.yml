@@ -198,10 +198,30 @@ jobs:
           if ! docker inspect "${NGX}" -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | grep -qw "${NET}"; then
             docker network connect "${NET}" "${NGX}"
           fi
+          # Persist the link in mailcow's override (like the other Novixa sites), so nginx keeps it
+          # when mailcow is updated or recreated. Validated; the backup is restored on any doubt.
+          MC_DIR=/opt/mailcow-dockerized
+          OVR="${MC_DIR}/docker-compose.override.yml"
+          if [ -f "${OVR}" ] && ! grep -q "^      ${NET}: {}$" "${OVR}"; then
+            if grep -q "^      pizza-house-edge: {}$" "${OVR}"; then
+              BAK="${OVR}.bak.$(date +%Y%m%d%H%M%S)"
+              cp -p "${OVR}" "${BAK}"
+              sed -i "/^      pizza-house-edge: {}$/a\\      ${NET}: {}" "${OVR}"
+              printf '  %s:\n    external: true\n' "${NET}" >> "${OVR}"
+              if (cd "${MC_DIR}" && docker compose config -q); then
+                echo "  ${NET} persisted in mailcow override"
+              else
+                cp -p "${BAK}" "${OVR}"
+                echo "::warning::could not persist ${NET} in ${OVR} (restored); re-run after a mailcow update"
+              fi
+            else
+              echo "::warning::${OVR} layout not recognised; ${NET} is connected live only"
+            fi
+          fi
 
           echo "▶ 3/5 Start ${IMAGE}:${APP_TAG} (previous: ${PREV_TAG:-none})"
           wait_healthy() {
-            for i in $(seq 1 40); do
+            for _ in $(seq 1 40); do
               STATE="$(docker inspect -f '{{.State.Health.Status}}' "${APP}" 2>/dev/null || echo missing)"
               [ "${STATE}" = "healthy" ] && return 0
               sleep 5
