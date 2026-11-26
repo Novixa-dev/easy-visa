@@ -1,0 +1,278 @@
+# Deploy easy-visa.novixa.dev to the shared Novixa VPS.
+#
+# Flow: verify (typecheck + lint + unit tests) → build the Docker image on the runner
+#       → stream it to the server over SSH (docker save | docker load, no registry)
+#       → `docker compose up` in /opt/easy-visa with a health check and automatic
+#       rollback → install the site block in mailcow's nginx (only if it changed;
+#       `nginx -t` first, previous file restored on failure) → public check.
+#
+# The VPS also hosts mailcow and other Novixa sites. This workflow only touches
+# things named easy-visa*: /opt/easy-visa, the easy-visa-* containers, volumes and
+# networks, and mailcow's conf.d/easy-visa{.conf,/}. nginx is reloaded, never restarted.
+#
+# Repository secrets (required): DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY.
+# Optional (email notifications): SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
+#   EMAIL_FROM_ADDRESS, ADMIN_NOTIFY_EMAIL.
+# POSTGRES_PASSWORD and PAYLOAD_SECRET are generated on the server on the first
+# deploy and live only in /opt/easy-visa/.env.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Roll back to this already-loaded image tag (e.g. sha-1a2b3c4); skips the build'
+        required: false
+
+concurrency:
+  group: deploy-easy-visa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SITE_URL: https://easy-visa.novixa.dev
+  DOMAIN: easy-visa.novixa.dev
+  APP_DIR: /opt/easy-visa
+  IMAGE: easy-visa
+  # Server's ED25519 host key fingerprint (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub).
+  HOST_KEY_FINGERPRINT: SHA256:d+JQJVamnSYO2Wv/XHo9I3hGEp/id9TRXM27+QI6pTU
+
+jobs:
+  verify:
+    name: Typecheck · Lint · Unit tests
+    if: ${{ github.event.inputs.tag == '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:int
+
+  deploy:
+    name: Deploy to easy-visa.novixa.dev
+    needs: [verify]
+    if: ${{ always() && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: https://easy-visa.novixa.dev
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false }
+
+      - name: Resolve tag
+        # The input goes through the environment, never into the script text.
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            [[ "$INPUT_TAG" =~ ^sha-[0-9a-f]{7,40}$ ]] || { echo "::error::tag must look like sha-1a2b3c4"; exit 1; }
+            TAG="$INPUT_TAG"; echo "BUILD=false" >> "$GITHUB_ENV"
+          else
+            TAG="sha-${GITHUB_SHA::7}"; echo "BUILD=true" >> "$GITHUB_ENV"
+          fi
+          echo "APP_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Configure SSH (pinned host key)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            [ -n "${!name}" ] || { echo "::error::Missing repository secret: $name"; exit 1; }
+          done
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' | sed '/^[[:space:]]*$/d' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null || { echo "::error::DEPLOY_SSH_KEY is not a valid private key"; exit 1; }
+          ssh-keyscan -t ed25519 "$DEPLOY_HOST" 2>/dev/null > ~/.ssh/known_hosts
+          scanned=$(ssh-keygen -lf ~/.ssh/known_hosts | awk '{print $2}')
+          [ "$scanned" = "$HOST_KEY_FINGERPRINT" ] || { echo "::error::Host key mismatch: got '${scanned}'"; exit 1; }
+          cat > ~/.ssh/config <<EOF
+          Host vps
+            HostName ${DEPLOY_HOST}
+            User ${DEPLOY_USER}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ServerAliveInterval 30
+          EOF
+          ssh vps true || { echo "::error::SSH login failed — is the deploy public key in authorized_keys?"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+        if: ${{ env.BUILD == 'true' }}
+
+      - name: Build image
+        if: ${{ env.BUILD == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.APP_TAG }}
+          build-args: |
+            NEXT_PUBLIC_SITE_URL=${{ env.SITE_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Ship image
+        if: ${{ env.BUILD == 'true' }}
+        run: docker save "${IMAGE}:${APP_TAG}" | gzip -1 | ssh vps "gunzip | docker load"
+
+      - name: Upload deploy files
+        run: |
+          ssh vps "mkdir -p '${APP_DIR}/incoming' '${APP_DIR}/backups'"
+          scp -q deploy/novixa/docker-compose.yml deploy/novixa/easy-visa.mailcow.conf deploy/backup.sh \
+            "vps:${APP_DIR}/incoming/"
+
+      - name: Release on server
+        env:
+          ENV_SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          ENV_SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          ENV_SMTP_USER: ${{ secrets.SMTP_USER }}
+          ENV_SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          ENV_EMAIL_FROM_ADDRESS: ${{ secrets.EMAIL_FROM_ADDRESS }}
+          ENV_ADMIN_NOTIFY_EMAIL: ${{ secrets.ADMIN_NOTIFY_EMAIL }}
+        run: |
+          # Values travel over stdin (never on a command line or in the log).
+          {
+            printf 'APP_TAG=%s\nSITE_URL=%s\nDOMAIN=%s\nAPP_DIR=%s\nIMAGE=%s\n' "$APP_TAG" "$SITE_URL" "$DOMAIN" "$APP_DIR" "$IMAGE"
+            for k in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS EMAIL_FROM_ADDRESS ADMIN_NOTIFY_EMAIL; do
+              v="ENV_$k"; printf 'ENV_%s=%s\n' "$k" "${!v}"
+            done
+            echo '---'
+            cat <<'SCRIPT'
+          set -euo pipefail
+          cd "${APP_DIR}"
+          IN="${APP_DIR}/incoming"
+          MC_CONF=/opt/mailcow-dockerized/data/conf/nginx
+          NGX=mailcowdockerized-nginx-mailcow-1
+          NET=easy-visa-edge
+          APP=easy-visa-app
+
+          docker image inspect "${IMAGE}:${APP_TAG}" >/dev/null || { echo "✗ image ${IMAGE}:${APP_TAG} is not on the server"; exit 1; }
+
+          echo "▶ 1/5 .env (secrets created once, kept afterwards)"
+          umask 077
+          if [ ! -f .env ]; then
+            {
+              echo "POSTGRES_USER=easyvisa"
+              echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+              echo "POSTGRES_DB=easyvisa"
+              echo "PAYLOAD_SECRET=$(openssl rand -hex 48)"
+              echo "EMAIL_FROM_NAME=Easy Visa"
+            } > .env
+            echo "  created new .env"
+          fi
+          set_env() {  # set_env KEY VALUE — replace or append; skipped when VALUE is empty
+            [ -n "$2" ] || return 0
+            grep -v "^$1=" .env > .env.tmp || true
+            printf '%s=%s\n' "$1" "$2" >> .env.tmp
+            mv .env.tmp .env
+          }
+          PREV_TAG="$(grep '^APP_TAG=' .env | cut -d= -f2 || true)"
+          set_env APP_TAG "${APP_TAG}"
+          set_env NEXT_PUBLIC_SITE_URL "${SITE_URL}"
+          for k in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS EMAIL_FROM_ADDRESS ADMIN_NOTIFY_EMAIL; do
+            v="ENV_$k"; set_env "$k" "${!v:-}"
+          done
+          umask 022
+          cp "${IN}/docker-compose.yml" docker-compose.yml
+          cp "${IN}/backup.sh" backup.sh
+
+          echo "▶ 2/5 Network (created once, attached to mailcow nginx without restart)"
+          docker network inspect "${NET}" >/dev/null 2>&1 || docker network create "${NET}"
+          if ! docker inspect "${NGX}" -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | grep -qw "${NET}"; then
+            docker network connect "${NET}" "${NGX}"
+          fi
+
+          echo "▶ 3/5 Start ${IMAGE}:${APP_TAG} (previous: ${PREV_TAG:-none})"
+          wait_healthy() {
+            for i in $(seq 1 40); do
+              STATE="$(docker inspect -f '{{.State.Health.Status}}' "${APP}" 2>/dev/null || echo missing)"
+              [ "${STATE}" = "healthy" ] && return 0
+              sleep 5
+            done
+            return 1
+          }
+          docker compose up -d --remove-orphans
+          if wait_healthy; then
+            echo "✓ ${APP} healthy"
+          else
+            echo "✗ ${APP} did not become healthy"; docker logs --tail 80 "${APP}" || true
+            if [ -n "${PREV_TAG}" ] && [ "${PREV_TAG}" != "${APP_TAG}" ]; then
+              echo "↩ rolling back to ${PREV_TAG}"
+              sed -i "s/^APP_TAG=.*/APP_TAG=${PREV_TAG}/" .env
+              docker compose up -d --remove-orphans
+              wait_healthy && echo "✓ rolled back to ${PREV_TAG}" || echo "✗ rollback is unhealthy too"
+            fi
+            exit 1
+          fi
+
+          echo "▶ 4/5 mailcow nginx site block"
+          if [ ! -f "${MC_CONF}/easy-visa/origin.pem" ]; then
+            mkdir -p "${MC_CONF}/easy-visa"
+            for src in hrc-center aqar-landing pizza-house; do
+              if [ -f "${MC_CONF}/${src}/origin.pem" ]; then
+                cp -p "${MC_CONF}/${src}/origin.pem" "${MC_CONF}/${src}/origin.key" "${MC_CONF}/easy-visa/"
+                echo "  origin certificate copied from ${src}"; break
+              fi
+            done
+            [ -f "${MC_CONF}/easy-visa/origin.pem" ] || { echo "✗ no *.novixa.dev origin certificate found to copy"; exit 1; }
+          fi
+          if ! cmp -s "${IN}/easy-visa.mailcow.conf" "${MC_CONF}/easy-visa.conf"; then
+            PREV=""
+            if [ -f "${MC_CONF}/easy-visa.conf" ]; then
+              PREV="backups/easy-visa.conf.$(date +%Y%m%d%H%M%S)"
+              cp -p "${MC_CONF}/easy-visa.conf" "${PREV}"
+            fi
+            cp "${IN}/easy-visa.mailcow.conf" "${MC_CONF}/easy-visa.conf"
+            if docker exec "${NGX}" nginx -t; then
+              docker exec "${NGX}" nginx -s reload
+              echo "✓ nginx reloaded"
+            else
+              echo "✗ nginx -t failed — restoring previous site block"
+              if [ -n "${PREV}" ]; then cp -p "${PREV}" "${MC_CONF}/easy-visa.conf"; else rm -f "${MC_CONF}/easy-visa.conf"; fi
+              docker exec "${NGX}" nginx -t
+              exit 1
+            fi
+          else
+            echo "  site block unchanged"
+          fi
+
+          echo "▶ 5/5 Check through nginx and tidy up"
+          sleep 2
+          curl -fsS -o /dev/null -k --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/ar"
+          echo "✓ https://${DOMAIN}/ar answers through nginx"
+          # Keep the 3 newest images of this app only; other images are never touched.
+          docker image ls "${IMAGE}" --format '{{.Tag}}' | grep -v "^${APP_TAG}$" | tail -n +3 | xargs -r -I{} docker rmi "${IMAGE}:{}" || true
+          rm -rf "${IN}"
+          echo "✓ Deployed ${APP_TAG}"
+          SCRIPT
+          } | ssh vps 'set -a; while IFS= read -r line && [ "$line" != "---" ]; do export "$line"; done; set +a; bash -s'
+
+      - name: Public check (through Cloudflare)
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${SITE_URL}/ar" || true)
+            [ "$code" = "200" ] && { echo "Live: ${SITE_URL}"; exit 0; }
+            echo "Attempt $i → ${code}, retrying…"; sleep 10
+          done
+          echo "::error::${SITE_URL} is not answering 200 (the server-side check passed, so look at Cloudflare DNS for easy-visa)"; exit 1
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

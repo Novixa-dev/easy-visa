@@ -1,0 +1,127 @@
+# Production stack for easy-visa.novixa.dev on the shared Novixa VPS.
+# Lives at /opt/easy-visa/docker-compose.yml (synced by .github/workflows/deploy.yml).
+#
+# Public traffic arrives through mailcow's nginx (80/443, Cloudflare in front) over the
+# easy-visa-edge network (deploy/novixa/easy-visa.mailcow.conf). Postgres sits on a private
+# network the edge never sees. The loopback port is for on-host checks only.
+#
+# /opt/easy-visa/.env is created on the first deploy (random POSTGRES_PASSWORD and
+# PAYLOAD_SECRET) and kept afterwards: never regenerate it, the database volume depends on it.
+name: easy-visa
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: easy-visa-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easyvisa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-easyvisa}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-easyvisa} -d ${POSTGRES_DB:-easyvisa}']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  app:
+    image: easy-visa:${APP_TAG:-latest}
+    container_name: easy-visa-app
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-easyvisa}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-easyvisa}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${APP_PORT:-3095}:3000'
+    networks:
+      - edge
+      - internal
+    volumes:
+      # Named volumes keep the image's ownership (uid 1001), so the app can write to them.
+      - media:/app/media
+      - private_uploads:/app/private-uploads
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/ar').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      # First start runs the database migrations.
+      start_period: 90s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  # Nightly database dump + uploads archive into /opt/easy-visa/backups (kept 14 days).
+  backup:
+    image: postgres:16-alpine
+    container_name: easy-visa-backup
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-easyvisa}
+      POSTGRES_DB: ${POSTGRES_DB:-easyvisa}
+    volumes:
+      - ./backups:/backups
+      - ./backup.sh:/backup.sh:ro
+      - private_uploads:/data/private-uploads:ro
+      - media:/data/media:ro
+    entrypoint: ['/bin/sh', '-c', 'while true; do sh /backup.sh; sleep 86400; done']
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '3'
+
+volumes:
+  pgdata:
+  media:
+  private_uploads:
+
+networks:
+  internal:
+    name: easy-visa-internal
+  # Shared only with mailcow's nginx; created by the deploy workflow.
+  edge:
+    external: true
+    name: easy-visa-edge

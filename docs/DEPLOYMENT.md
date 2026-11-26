@@ -4,7 +4,18 @@
 
 A small VPS (2 vCPU / 4 GB RAM / 60 GB disk) close to the audience, e.g. Hetzner (Germany/Finland), DigitalOcean (Frankfurt) or a Gulf region provider. Roughly 6–25 USD per month. Register the **domain and hosting in Easy Visa's own account**, not a developer's.
 
-## First deployment
+## easy-visa.novixa.dev (shared Novixa VPS)
+
+Deployed by [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) on every push to `main` (or *Run workflow*; give `tag: sha-xxxxxxx` to roll back). It builds the image on GitHub, streams it to the server over SSH, starts `deploy/novixa/docker-compose.yml` in `/opt/easy-visa` (app + Postgres + nightly backup) and installs `deploy/novixa/easy-visa.mailcow.conf` in mailcow's nginx (`nginx -t` first, reload only). If the new version is unhealthy it rolls back to the previous image.
+
+- Repository secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (the same server as the other Novixa sites). Optional: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM_ADDRESS`, `ADMIN_NOTIFY_EMAIL`.
+- Cloudflare: add a proxied DNS record `easy-visa` → the server IP (SSL mode *Full (strict)*, like the other subdomains).
+- `/opt/easy-visa/.env` is created on the first deploy with a random `POSTGRES_PASSWORD` and `PAYLOAD_SECRET`. Keep it (and back it up): the database depends on it.
+- Backups: `/opt/easy-visa/backups/`. Logs: `docker logs easy-visa-app`.
+
+The Caddy-based `deploy/docker-compose.prod.yml` below is for a dedicated server only; do not use it on the Novixa VPS (mailcow owns ports 80/443).
+
+## First deployment (dedicated server)
 
 ```bash
 # on the server (Ubuntu 24.04), with Docker installed
