@@ -203,12 +203,16 @@ jobs:
           MC_DIR=/opt/mailcow-dockerized
           OVR="${MC_DIR}/docker-compose.override.yml"
           if [ -f "${OVR}" ] && ! grep -q "^      ${NET}: {}$" "${OVR}"; then
-            if grep -q "^      pizza-house-edge: {}$" "${OVR}"; then
+            # Expected layout: "  nginx-mailcow:" → "    networks:" list, and the top-level
+            # "networks:" section last in the file (new entries are appended there).
+            if grep -q "^  nginx-mailcow:$" "${OVR}" && [ "$(grep -E '^[a-z]' "${OVR}" | tail -n 1)" = "networks:" ]; then
               BAK="${OVR}.bak.$(date +%Y%m%d%H%M%S)"
               cp -p "${OVR}" "${BAK}"
-              sed -i "/^      pizza-house-edge: {}$/a\\      ${NET}: {}" "${OVR}"
+              sed -i "/^  nginx-mailcow:$/,/^    networks:$/{/^    networks:$/a\\      ${NET}: {}
+          }" "${OVR}"
+              [ -z "$(tail -c 1 "${OVR}")" ] || echo >> "${OVR}"
               printf '  %s:\n    external: true\n' "${NET}" >> "${OVR}"
-              if (cd "${MC_DIR}" && docker compose config -q); then
+              if (cd "${MC_DIR}" && docker compose config 2>/dev/null | grep -q "${NET}") && grep -q "^      ${NET}: {}$" "${OVR}"; then
                 echo "  ${NET} persisted in mailcow override"
               else
                 cp -p "${BAK}" "${OVR}"
