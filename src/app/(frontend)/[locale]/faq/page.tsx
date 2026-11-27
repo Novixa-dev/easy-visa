@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { getTranslations, setRequestLocale } from 'next-intl/server'
 import { PageHeader } from '@/components/site/PageHeader'
 import { getFaqs } from '@/lib/queries'
-import { pageMeta } from '@/lib/seo'
+import { jsonLd, pageMeta } from '@/lib/seo'
 import type { Locale } from '@/lib/constants'
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: Locale }> }): Promise<Metadata> {
@@ -23,7 +23,7 @@ export default async function FaqPage({ params }: { params: Promise<{ locale: Lo
   }
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ld) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(ld) }} />
       <PageHeader title={tn('faq')} crumbs={[{ href: '/', label: tn('home') }, { label: tn('faq') }]} />
       <div className="container-page py-12 sm:py-16">
         <div className="max-w-3xl divide-y divide-line border-y border-line">

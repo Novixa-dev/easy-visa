@@ -20,26 +20,30 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       select: { slug: true, updatedAt: true },
     }),
   ])
-  const entry = (path: string, lastModified?: string, priority = 0.6): MetadataRoute.Sitemap[number] => ({
-    url: `${base}/ar${path}`,
-    lastModified: lastModified ? new Date(lastModified) : undefined,
-    priority,
-    alternates: { languages: { ar: `${base}/ar${path}`, en: `${base}/en${path}` } },
-  })
+  // Include an entry for every localized URL. Each entry also declares its
+  // complete hreflang cluster, as recommended for multilingual sitemaps.
+  const entries = (path: string, lastModified?: string, priority = 0.6): MetadataRoute.Sitemap =>
+    (['ar', 'en'] as const).map((locale) => ({
+      url: `${base}/${locale}${path}`,
+      lastModified: lastModified ? new Date(lastModified) : undefined,
+      changeFrequency: 'weekly',
+      priority,
+      alternates: { languages: { ar: `${base}/ar${path}`, en: `${base}/en${path}`, 'x-default': `${base}/ar${path}` } },
+    }))
   return [
-    entry('', undefined, 1),
-    entry('/services', undefined, 0.9),
-    ...categories.docs.map((c) => entry(`/services/${c.slug}`, c.updatedAt, 0.8)),
-    ...services.docs.map((s) => entry(`/services/${s.slug}`, s.updatedAt, 0.8)),
-    entry('/trips', undefined, 0.85),
-    ...trips.docs.map((t) => entry(`/trips/${t.slug}`, t.updatedAt, 0.7)),
-    entry('/offers', undefined, 0.7),
-    ...offers.docs.map((o) => entry(`/offers/${o.slug}`, o.updatedAt, 0.5)),
-    entry('/track', undefined, 0.6),
-    entry('/about'),
-    entry('/contact'),
-    entry('/faq'),
-    entry('/privacy', undefined, 0.2),
-    entry('/terms', undefined, 0.2),
+    ...entries('', undefined, 1),
+    ...entries('/services', undefined, 0.9),
+    ...categories.docs.flatMap((c) => entries(`/services/${c.slug}`, c.updatedAt, 0.8)),
+    ...services.docs.flatMap((s) => entries(`/services/${s.slug}`, s.updatedAt, 0.8)),
+    ...entries('/trips', undefined, 0.85),
+    ...trips.docs.flatMap((t) => entries(`/trips/${t.slug}`, t.updatedAt, 0.7)),
+    ...entries('/offers', undefined, 0.7),
+    ...offers.docs.flatMap((o) => entries(`/offers/${o.slug}`, o.updatedAt, 0.5)),
+    ...entries('/track', undefined, 0.6),
+    ...entries('/about'),
+    ...entries('/contact'),
+    ...entries('/faq'),
+    ...entries('/privacy', undefined, 0.2),
+    ...entries('/terms', undefined, 0.2),
   ]
 }

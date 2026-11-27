@@ -10,7 +10,7 @@ import { tripAvailability } from '@/collections/Trips'
 import { getSettings, getTrip } from '@/lib/queries'
 import { formatDate, formatMoney, formatPrice } from '@/lib/format'
 import { siteUrl, waLink } from '@/lib/misc'
-import { pageMeta } from '@/lib/seo'
+import { jsonLd, pageMeta } from '@/lib/seo'
 import type { Currency, Locale } from '@/lib/constants'
 import type { Company, Media } from '@/payload-types'
 
@@ -68,7 +68,7 @@ export default async function TripPage({ params }: Params) {
 
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ld) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(ld) }} />
       <PageHeader title={`${trip.from} ${locale === 'ar' ? '←' : '→'} ${trip.to}`} intro={trip.title} crumbs={[{ href: '/', label: tn('home') }, { href: '/trips', label: t('title') }, { label: trip.title }]}>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <AvailabilityBadge state={a.state} label={stateLabel} />

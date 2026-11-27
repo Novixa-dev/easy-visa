@@ -10,7 +10,7 @@ import { CheckIcon, ServiceIcon, WhatsAppIcon } from '@/components/icons'
 import { getCategories, getService, getServices, getSettings } from '@/lib/queries'
 import { formatPrice } from '@/lib/format'
 import { waLink } from '@/lib/misc'
-import { pageMeta } from '@/lib/seo'
+import { jsonLd, pageMeta } from '@/lib/seo'
 import type { Locale } from '@/lib/constants'
 import type { Media, Service, ServiceCategory } from '@/payload-types'
 
@@ -73,7 +73,7 @@ async function ServiceView({ locale, service }: { locale: Locale; service: Servi
 
   return (
     <>
-      {faqLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />}
+      {faqLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(faqLd) }} />}
       <PageHeader
         title={service.title}
         intro={service.summary}

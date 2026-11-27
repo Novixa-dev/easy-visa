@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { getTranslations, setRequestLocale } from 'next-intl/server'
-import { pageMeta } from '@/lib/seo'
+import { absoluteUrl, jsonLd, pageMeta } from '@/lib/seo'
 import { Link } from '@/i18n/routing'
 import { Hero } from '@/components/home/Hero'
 import { DeparturesBoard } from '@/components/home/DeparturesBoard'
@@ -9,7 +9,7 @@ import { PILLAR_ICON, WhatsAppIcon, PhoneIcon } from '@/components/icons'
 import { getCategories, getHomepage, getOffers, getServices, getSettings, getTrips } from '@/lib/queries'
 import { TripCard } from '@/components/trips/TripCard'
 import { formatPhone } from '@/lib/phone'
-import { siteUrl, waLink } from '@/lib/misc'
+import { waLink } from '@/lib/misc'
 import type { Locale } from '@/lib/constants'
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: Locale }> }): Promise<Metadata> {
@@ -35,21 +35,31 @@ export default async function HomePage({ params }: { params: Promise<{ locale: L
   const bookable = allTrips.filter((x) => !x.manualFull && x.bookingOpen !== false)
   const trips = [...bookable.slice(0, 3), ...allTrips.filter((x) => x.featured && !bookable.slice(0, 3).includes(x))].slice(0, 3)
 
-  const jsonLd = {
+  const businessLd = {
     '@context': 'https://schema.org',
     '@type': 'TravelAgency',
+    '@id': absoluteUrl(`/${locale}/#organization`),
     name: 'Easy Visa',
     alternateName: 'إيزي فيزا',
-    url: `${siteUrl()}/${locale}`,
-    logo: `${siteUrl()}/brand/icon-512.png`,
+    url: absoluteUrl(`/${locale}`),
+    logo: absoluteUrl('/brand/icon-512.png'),
+    image: absoluteUrl('/brand/og.jpg'),
     telephone: settings.primaryWhatsapp,
-    address: { '@type': 'PostalAddress', addressLocality: 'Mukalla', addressRegion: 'Hadhramaut', addressCountry: 'YE' },
-    sameAs: [settings.instagram, settings.facebook].filter(Boolean),
+    ...(settings.email ? { email: settings.email } : {}),
+    address: {
+      '@type': 'PostalAddress',
+      ...(settings.address ? { streetAddress: settings.address } : {}),
+      addressLocality: settings.city || 'Mukalla',
+      addressRegion: 'Hadhramaut',
+      addressCountry: 'YE',
+    },
+    contactPoint: [{ '@type': 'ContactPoint', telephone: settings.primaryWhatsapp, contactType: 'customer service', availableLanguage: ['Arabic', 'English'] }],
+    sameAs: [settings.instagram, settings.facebook, settings.tiktok, settings.snapchat].filter(Boolean),
   }
 
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(businessLd) }} />
       <Hero title={home.hero.title} subtitle={home.hero.subtitle} whatsapp={settings.primaryWhatsapp} city={t('eyebrowCity')} />
 
       {home.pillars && home.pillars.length > 0 && (
