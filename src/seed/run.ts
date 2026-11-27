@@ -59,24 +59,34 @@ async function main() {
     process.exit(1)
   }
 
+  const isProd = process.env.NODE_ENV === 'production'
+  if (isProd) {
+    // The wipe below deletes requests, customers and payments: never let it touch real customers.
+    const demoPhones = demoRequests().map((d) => d.phone)
+    const real = await payload.count({ collection: 'requests', where: { phone: { not_in: demoPhones } }, overrideAccess: true })
+    const realMessages = await payload.count({
+      collection: 'contact-messages',
+      where: { phone: { not_in: demoMessages.map((m) => m.phone) } },
+      overrideAccess: true,
+    })
+    if (real.totalDocs > 0 || realMessages.totalDocs > 0) {
+      payload.logger.error(
+        `Refusing to seed: ${real.totalDocs} real request(s) and ${realMessages.totalDocs} real message(s) exist and would be deleted`,
+      )
+      process.exit(1)
+    }
+  }
+
   payload.logger.info('Wiping content…')
   await wipe(payload)
 
-  // Team
-  const ownerEmail = process.env.SEED_OWNER_EMAIL || 'owner@easyvisa.test'
-  const ownerPass = process.env.SEED_OWNER_PASSWORD || 'ChangeMe!2026'
-  const team = [
-    { email: ownerEmail, password: ownerPass, name: 'مالك Easy Visa', role: 'owner' as const },
-    { email: 'staff@easyvisa.test', password: 'Staff!2026', name: 'موظف الاستقبال', role: 'staff' as const },
-  ]
-  const users: Record<string, number> = {}
-  for (const u of team) {
-    const found = await payload.find({ collection: 'users', where: { email: { equals: u.email } }, limit: 1, overrideAccess: true })
-    const doc = found.docs[0]
-      ? await payload.update({ collection: 'users', id: found.docs[0].id, data: { ...u, active: true }, overrideAccess: true, context: { skipAudit: true } })
-      : await payload.create({ collection: 'users', data: { ...u, active: true }, overrideAccess: true, context: { skipAudit: true } })
-    users[u.role] = doc.id as number
-  }
+  const users: Record<string, number | undefined> = {}
+  if (isProd) {
+    // No accounts with the well-known seed passwords in production: the owner signs up at /admin.
+    // Demo requests are assigned to the first existing account, if there is one.
+    const first = await payload.find({ collection: 'users', limit: 1, sort: 'createdAt', depth: 0, overrideAccess: true })
+    users.staff = first.docs[0]?.id as number | undefined
+  } else await seedTeam(payload, users)
 
   payload.logger.info('Globals…')
   await bilingualGlobal(payload, 'site-settings', settings)
@@ -139,14 +149,18 @@ async function main() {
   }
 
   payload.logger.info('✓ Seed complete')
-  payload.logger.info(`  Owner login: ${ownerEmail} / ${ownerPass}`)
-  payload.logger.info(`  Staff login: staff@easyvisa.test / Staff!2026`)
+  if (!isProd) {
+    payload.logger.info(`  Owner login: ${process.env.SEED_OWNER_EMAIL || 'owner@easyvisa.test'} / ${process.env.SEED_OWNER_PASSWORD || 'ChangeMe!2026'}`)
+    payload.logger.info('  Staff login: staff@easyvisa.test / Staff!2026')
+  }
   process.exit(0)
 }
 
-async function seedDemoRequests(payload: Payload, svc: Record<string, number>, users: Record<string, number>) {
-  const inDays = (d: number) => new Date(Date.now() + d * 86400_000).toISOString().slice(0, 10)
-  const demo = [
+const inDays = (d: number) => new Date(Date.now() + d * 86400_000).toISOString().slice(0, 10)
+
+/** The demo customers. Phones are also used to tell demo requests from real ones. */
+function demoRequests() {
+  return [
     { name: 'سالم عوض باوزير', phone: '+967771234501', service: 'umrah-visa', status: 'new', travel: 40, answers: [['الجنسية', 'اليمن'], ['عدد المسافرين', '4'], ['تاريخ السفر المتوقع', inDays(40)]] },
     { name: 'فاطمة سعيد بن طالب', phone: '+967733334502', service: 'family-visit-visa', status: 'under_review', travel: 25, answers: [['الدولة المراد زيارتها', 'المملكة العربية السعودية'], ['عدد المتقدمين', '2']] },
     { name: 'عبدالله أحمد الكثيري', phone: '+967712224503', service: 'flight-booking', status: 'awaiting_customer', travel: 9, msg: 'نحتاج صورة واضحة من الجواز لإكمال الحجز. أرسلها على واتساب.', answers: [['من', 'المكلا – الريان'], ['إلى', 'جدة'], ['تاريخ الذهاب', inDays(9)]] },
@@ -156,6 +170,26 @@ async function seedDemoRequests(payload: Payload, svc: Record<string, number>, u
     { name: 'نورة عبدالله باعشن', phone: '+967770004507', service: 'travel-consultation', status: 'rejected', msg: 'للأسف لا يمكن تقديم هذا النوع من التأشيرات حالياً. تواصل معنا لمعرفة البدائل.', answers: [['موضوع الاستشارة', 'تأشيرة'], ['سؤالك', 'هل يمكن التقديم على تأشيرة عمل؟']] },
     { name: 'أحمد علي بامطرف', phone: '+967711114508', service: 'umrah-visa', status: 'cancelled', source: 'whatsapp', answers: [['عدد المسافرين', '1']] },
   ]
+}
+
+async function seedTeam(payload: Payload, users: Record<string, number | undefined>) {
+  const ownerEmail = process.env.SEED_OWNER_EMAIL || 'owner@easyvisa.test'
+  const ownerPass = process.env.SEED_OWNER_PASSWORD || 'ChangeMe!2026'
+  const team = [
+    { email: ownerEmail, password: ownerPass, name: 'مالك Easy Visa', role: 'owner' as const },
+    { email: 'staff@easyvisa.test', password: 'Staff!2026', name: 'موظف الاستقبال', role: 'staff' as const },
+  ]
+  for (const u of team) {
+    const found = await payload.find({ collection: 'users', where: { email: { equals: u.email } }, limit: 1, overrideAccess: true })
+    const doc = found.docs[0]
+      ? await payload.update({ collection: 'users', id: found.docs[0].id, data: { ...u, active: true }, overrideAccess: true, context: { skipAudit: true } })
+      : await payload.create({ collection: 'users', data: { ...u, active: true }, overrideAccess: true, context: { skipAudit: true } })
+    users[u.role] = doc.id as number
+  }
+}
+
+async function seedDemoRequests(payload: Payload, svc: Record<string, number>, users: Record<string, number | undefined>) {
+  const demo = demoRequests()
 
   const flow = ['new', 'under_review', 'awaiting_customer', 'in_progress', 'completed']
   for (const d of demo) {
@@ -187,7 +221,7 @@ async function seedDemoRequests(payload: Payload, svc: Record<string, number>, u
         id: req.id,
         data: { status: s as never, customerMessage: s === target ? d.msg ?? '' : '', assignedTo: users.staff },
         overrideAccess: true,
-        user: { id: users.staff, collection: 'users' } as never,
+        user: (users.staff ? { id: users.staff, collection: 'users' } : undefined) as never,
         context: { skipAudit: true },
       })
     }
@@ -200,7 +234,7 @@ async function seedDemoRequests(payload: Payload, svc: Record<string, number>, u
           contactLog: [{ channel: 'whatsapp', outcome: 'reached', note: 'أُرسل تحديث الحالة' }],
         },
         overrideAccess: true,
-        user: { id: users.staff, collection: 'users' } as never,
+        user: (users.staff ? { id: users.staff, collection: 'users' } : undefined) as never,
         context: { skipAudit: true },
       })
     }

@@ -19,6 +19,14 @@ ARG NEXT_PUBLIC_SITE_URL=https://easyvisa.example
 ENV DATABASE_URL=$DATABASE_URL PAYLOAD_SECRET=$PAYLOAD_SECRET NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 RUN npm run build
 
+# One-off tasks (seed) on the server: source + all dependencies, no build. Not the app image.
+#   docker run --rm --network easy-visa-internal ... easy-visa-tools node --import tsx/esm src/seed/run.ts --force
+FROM base AS tools
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+USER node
+
 FROM base AS runner
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs

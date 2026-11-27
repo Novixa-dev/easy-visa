@@ -26,6 +26,11 @@ on:
       tag:
         description: 'Roll back to this already-loaded image tag (e.g. sha-1a2b3c4); skips the build'
         required: false
+      seed:
+        description: 'Load starter content after deploying (refuses if real requests exist; creates no accounts)'
+        type: choice
+        options: [none, content, demo]
+        default: none
 
 concurrency:
   group: deploy-easy-visa
@@ -131,6 +136,21 @@ jobs:
       - name: Ship image
         if: ${{ env.BUILD == 'true' }}
         run: docker save "${IMAGE}:${APP_TAG}" | gzip -1 | ssh vps "gunzip | docker load"
+
+      - name: Build tools image (seed)
+        if: ${{ github.event.inputs.seed == 'content' || github.event.inputs.seed == 'demo' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: tools
+          load: true
+          tags: ${{ env.IMAGE }}-tools:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Ship tools image (seed)
+        if: ${{ github.event.inputs.seed == 'content' || github.event.inputs.seed == 'demo' }}
+        run: docker save "${IMAGE}-tools:latest" | gzip -1 | ssh vps "gunzip | docker load"
 
       - name: Upload deploy files
         run: |
@@ -287,6 +307,32 @@ jobs:
           echo "✓ Deployed ${APP_TAG}"
           SCRIPT
           } | ssh vps 'set -a; while IFS= read -r line && [ "$line" != "---" ]; do export "$line"; done; set +a; bash -s'
+
+      - name: Seed starter content
+        if: ${{ github.event.inputs.seed == 'content' || github.event.inputs.seed == 'demo' }}
+        env:
+          SEED_MODE: ${{ github.event.inputs.seed }}
+        run: |
+          case "$SEED_MODE" in content) FLAGS="--no-demo" ;; demo) FLAGS="" ;; *) echo "::error::bad seed mode"; exit 1 ;; esac
+          ssh vps "APP_DIR='${APP_DIR}' IMAGE='${IMAGE}' FLAGS='${FLAGS}' bash -s" <<'SCRIPT'
+          set -euo pipefail
+          cd "${APP_DIR}"
+          val() { grep "^$1=" .env | cut -d= -f2-; }
+          # Via the environment, not the command line, so the password never shows in `ps`.
+          DATABASE_URL="postgresql://$(val POSTGRES_USER):$(val POSTGRES_PASSWORD)@easy-visa-db:5432/$(val POSTGRES_DB)"
+          export DATABASE_URL
+          echo "▶ Seed (${FLAGS:-with demo data})"
+          # shellcheck disable=SC2086
+          docker run --rm --network easy-visa-internal --env-file .env -e NODE_ENV=production -e DATABASE_URL \
+            --memory 1g "${IMAGE}-tools:latest" node --no-deprecation --import tsx/esm src/seed/run.ts --force ${FLAGS} < /dev/null
+          echo "▶ Restart the app so every page shows the new content"
+          docker compose up -d --force-recreate app
+          for _ in $(seq 1 40); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' easy-visa-app)" = "healthy" ] && { echo "✓ easy-visa-app healthy"; exit 0; }
+            sleep 5
+          done
+          echo "✗ easy-visa-app did not become healthy after the seed"; docker logs --tail 60 easy-visa-app; exit 1
+          SCRIPT
 
       - name: Public check (through Cloudflare)
         run: |
