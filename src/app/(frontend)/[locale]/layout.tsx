@@ -8,6 +8,7 @@ import { SiteHeader } from '@/components/site/Header'
 import { SiteFooter } from '@/components/site/Footer'
 import { MobileActionBar } from '@/components/site/MobileActionBar'
 import { Analytics } from '@/components/site/Analytics'
+import { PwaInstallPrompt } from '@/components/site/PwaInstallPrompt'
 import { getSettings } from '@/lib/queries'
 import { siteUrl } from '@/lib/misc'
 import type { Locale } from '@/lib/constants'
@@ -63,6 +64,7 @@ export default async function LocaleLayout({ children, params }: { children: Rea
           </main>
           <SiteFooter settings={settings} />
           <MobileActionBar whatsapp={settings.primaryWhatsapp} />
+          <PwaInstallPrompt locale={locale as Locale} />
           <Analytics />
         </NextIntlClientProvider>
       </body>
