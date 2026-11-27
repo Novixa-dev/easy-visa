@@ -253,10 +253,13 @@ jobs:
             return 1
           }
           docker compose up -d --remove-orphans
-          if wait_healthy; then
-            echo "✓ ${APP} healthy"
+          # The container health check covers the public site; also require the dashboard to open
+          # (following its login redirects), so a broken /admin rolls back instead of going live.
+          admin_ok() { curl -fsSL -o /dev/null --max-time 60 "http://127.0.0.1:${APP_PORT:-3095}/admin"; }
+          if wait_healthy && admin_ok; then
+            echo "✓ ${APP} healthy, dashboard opens"
           else
-            echo "✗ ${APP} did not become healthy"; docker logs --tail 80 "${APP}" || true
+            echo "✗ ${APP} is not healthy or /admin fails"; docker logs --tail 80 "${APP}" || true
             if [ -n "${PREV_TAG}" ] && [ "${PREV_TAG}" != "${APP_TAG}" ]; then
               echo "↩ rolling back to ${PREV_TAG}"
               sed -i "s/^APP_TAG=.*/APP_TAG=${PREV_TAG}/" .env
