@@ -5,8 +5,8 @@ export const routing = defineRouting({
   locales: ['ar', 'en'],
   defaultLocale: 'ar',
   localePrefix: 'always',
-  // At an unprefixed URL, use a remembered choice first, then the browser's
-  // Accept-Language header. Arabic remains the safe fallback.
+  // At an unprefixed URL, use a remembered choice first, then Arabic. The proxy (src/proxy.ts)
+  // drops the browser's Accept-Language, so a first visit always opens in Arabic.
   localeDetection: true,
   localeCookie: { maxAge: 60 * 60 * 24 * 365 },
 })

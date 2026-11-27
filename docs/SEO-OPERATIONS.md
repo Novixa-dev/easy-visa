@@ -2,7 +2,7 @@
 
 The application generates `/sitemap.xml` dynamically from published services, categories, offers, and future trips. It includes Arabic and English URLs and reciprocal `hreflang` annotations. `robots.txt` points crawlers to that sitemap and excludes the administration and API areas.
 
-The public root URL uses the visitor's saved language preference or browser language; Arabic is the fallback. Each language remains available at its stable `/ar` or `/en` URL.
+The public root URL uses the visitor's saved language preference; otherwise it opens in Arabic (the browser's language is not used, see `src/proxy.ts`). Each language remains available at its stable `/ar` or `/en` URL.
 
 ## Before production
 
