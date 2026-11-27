@@ -476,10 +476,13 @@ export interface Trip {
    */
   title: string;
   type: 'bus' | 'flight' | 'umrah' | 'package';
+  travelClass?: ('normal' | 'vip' | 'other') | null;
   company?: (number | null) | Company;
   service?: (number | null) | Service;
   from: string;
   to: string;
+  fromCountry?: (number | null) | Destination;
+  toCountry?: (number | null) | Destination;
   departureAt: string;
   returnAt?: string | null;
   /**
@@ -550,6 +553,25 @@ export interface Company {
   phone?: string | null;
   website?: string | null;
   internalNotes?: string | null;
+  active?: boolean | null;
+  /**
+   * Lower numbers appear first
+   */
+  sortOrder?: number | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "destinations".
+ */
+export interface Destination {
+  id: number;
+  name: string;
+  /**
+   * Two letters, e.g. SA or OM
+   */
+  code: string;
   active?: boolean | null;
   /**
    * Lower numbers appear first
@@ -692,25 +714,6 @@ export interface PageView {
   device?: string | null;
   referrer?: string | null;
   country?: string | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "destinations".
- */
-export interface Destination {
-  id: number;
-  name: string;
-  /**
-   * Two letters, e.g. SA or OM
-   */
-  code: string;
-  active?: boolean | null;
-  /**
-   * Lower numbers appear first
-   */
-  sortOrder?: number | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1097,10 +1100,13 @@ export interface RequestDocumentsSelect<T extends boolean = true> {
 export interface TripsSelect<T extends boolean = true> {
   title?: T;
   type?: T;
+  travelClass?: T;
   company?: T;
   service?: T;
   from?: T;
   to?: T;
+  fromCountry?: T;
+  toCountry?: T;
   departureAt?: T;
   returnAt?: T;
   duration?: T;

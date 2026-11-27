@@ -2,28 +2,12 @@ import type { CollectionConfig, Payload, PayloadRequest } from 'payload'
 import { isOwner, isStaff } from '@/access'
 import { L, priceField, publishStatusField, slugField } from '@/fields/common'
 import { audited } from '@/hooks/audit'
+import { tripAvailability, type TripAvailability } from '@/lib/trip-availability'
 
 /** Requests in these statuses still hold their seats. */
 export const HOLDING_STATUSES = ['new', 'under_review', 'awaiting_customer', 'in_progress', 'completed'] as const
 
-export type TripAvailability = 'open' | 'few' | 'full' | 'closed' | 'departed'
-
-export function tripAvailability(t: {
-  bookingOpen?: boolean | null
-  manualFull?: boolean | null
-  seatsTotal?: number | null
-  seatsBooked?: number | null
-  seatsHeldOffline?: number | null
-  departureAt?: string | null
-}, now = new Date()): { state: TripAvailability; seatsLeft: number | null } {
-  const total = t.seatsTotal ?? null
-  const left = total == null ? null : Math.max(0, total - (t.seatsBooked ?? 0) - (t.seatsHeldOffline ?? 0))
-  if (t.departureAt && new Date(t.departureAt) < now) return { state: 'departed', seatsLeft: left }
-  if (t.bookingOpen === false) return { state: 'closed', seatsLeft: left }
-  if (t.manualFull || left === 0) return { state: 'full', seatsLeft: 0 }
-  if (left != null && total != null && left <= Math.max(2, Math.ceil(total * 0.15))) return { state: 'few', seatsLeft: left }
-  return { state: 'open', seatsLeft: left }
-}
+export { tripAvailability, type TripAvailability }
 
 /** Recount seats held by requests for a trip (called whenever a linked request changes). */
 export async function recountTripSeats(payload: Payload, tripId: number | string, req?: PayloadRequest) {
@@ -88,6 +72,17 @@ export const Trips: CollectionConfig = {
                     { label: L('باقة سياحية', 'Holiday package'), value: 'package' },
                   ],
                 },
+                {
+                  name: 'travelClass',
+                  type: 'select',
+                  defaultValue: 'normal',
+                  label: L('فئة السفر', 'Travel class'),
+                  options: [
+                    { label: L('عادي', 'Normal'), value: 'normal' },
+                    { label: L('VIP / مميزة', 'VIP'), value: 'vip' },
+                    { label: L('أخرى', 'Other'), value: 'other' },
+                  ],
+                },
                 { name: 'company', type: 'relationship', relationTo: 'companies', label: L('الشركة / المزوّد', 'Company / provider') },
                 { name: 'service', type: 'relationship', relationTo: 'services', label: L('الخدمة المرتبطة (للتقارير)', 'Linked service (for reports)') },
               ],
@@ -97,6 +92,13 @@ export const Trips: CollectionConfig = {
               fields: [
                 { name: 'from', type: 'text', required: true, localized: true, label: L('من', 'From') },
                 { name: 'to', type: 'text', required: true, localized: true, label: L('إلى', 'To') },
+              ],
+            },
+            {
+              type: 'row',
+              fields: [
+                { name: 'fromCountry', type: 'relationship', relationTo: 'destinations', label: L('بلد الانطلاق', 'Departure country') },
+                { name: 'toCountry', type: 'relationship', relationTo: 'destinations', label: L('بلد الوجهة', 'Destination country') },
               ],
             },
             {

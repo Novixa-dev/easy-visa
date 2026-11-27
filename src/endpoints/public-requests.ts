@@ -8,7 +8,7 @@ import { clientIp, rateLimit } from '@/lib/rate-limit'
 import { normalizeReference } from '@/lib/reference'
 import { toLatinDigits } from '@/lib/digits'
 import { formatDate } from '@/lib/format'
-import { tripAvailability } from '@/collections/Trips'
+import { tripAvailability } from '@/lib/trip-availability'
 import type { Request as RequestDoc } from '@/payload-types'
 
 export const json = (body: unknown, status = 200, headers?: Record<string, string>) =>

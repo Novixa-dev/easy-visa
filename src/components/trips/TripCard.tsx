@@ -1,7 +1,9 @@
-import { getLocale, getTranslations } from 'next-intl/server'
+'use client'
+
+import { useLocale, useTranslations } from 'next-intl'
 import { Link } from '@/i18n/routing'
 import type { Company, Trip } from '@/payload-types'
-import { tripAvailability } from '@/collections/Trips'
+import { tripAvailability } from '@/lib/trip-availability'
 import { formatPrice } from '@/lib/format'
 import { cn } from '@/lib/misc'
 import type { Locale } from '@/lib/constants'
@@ -26,9 +28,9 @@ export function AvailabilityBadge({ state, label }: { state: string; label: stri
 }
 
 /** One departure, laid out like a ticket stub: date block, route, price, seats. */
-export async function TripCard({ trip }: { trip: Trip }) {
-  const locale = (await getLocale()) as Locale
-  const t = await getTranslations('trips')
+export function TripCard({ trip }: { trip: Trip }) {
+  const locale = useLocale() as Locale
+  const t = useTranslations('trips')
   const a = tripAvailability(trip)
   const d = new Date(trip.departureAt)
   const tz = { timeZone: 'Asia/Aden' }
@@ -40,6 +42,8 @@ export async function TripCard({ trip }: { trip: Trip }) {
   const company = typeof trip.company === 'object' ? (trip.company as Company | null) : null
   const Icon = TRIP_ICON[(trip.type ?? 'bus') as keyof typeof TRIP_ICON] ?? BusIcon
   const stateLabel = a.state === 'few' && a.seatsLeft != null && trip.showSeatsLeft !== false ? t('seatsLeft', { count: a.seatsLeft }) : t(a.state)
+  const travelClass = trip.travelClass ?? 'normal'
+  const classLabel = travelClass === 'vip' ? 'VIP' : travelClass === 'other' ? (locale === 'ar' ? 'أخرى' : 'Other') : locale === 'ar' ? 'عادي' : 'Normal'
 
   return (
     <article className={cn('group relative grid grid-cols-[4.5rem_1fr] overflow-hidden rounded-[var(--radius-ticket)] border border-line bg-white transition-colors hover:border-navy-700/35', a.state === 'full' && 'opacity-80')}>
@@ -55,6 +59,7 @@ export async function TripCard({ trip }: { trip: Trip }) {
               <Icon size={16} className="text-gold-600" /> {weekday}
               {company && <span>· {company.name}</span>}
             </p>
+            <span className={cn('mt-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold', travelClass === 'vip' ? 'bg-gold-100 text-gold-700' : 'bg-navy-50 text-navy-700')}>{classLabel}</span>
             <h3 className="mt-1 text-lg leading-snug font-semibold">
               <Link href={`/trips/${trip.slug}`} className="after:absolute after:inset-0">
                 {trip.from} <span className="text-gold-600" aria-hidden>{locale === 'ar' ? '←' : '→'}</span>
