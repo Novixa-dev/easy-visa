@@ -2,6 +2,8 @@
 
 The application generates `/sitemap.xml` dynamically from published services, categories, offers, and future trips. It includes Arabic and English URLs and reciprocal `hreflang` annotations. `robots.txt` points crawlers to that sitemap and excludes the administration and API areas.
 
+The public root URL uses the visitor's saved language preference or browser language; Arabic is the fallback. Each language remains available at its stable `/ar` or `/en` URL.
+
 ## Before production
 
 1. Set `NEXT_PUBLIC_SITE_URL` to the final HTTPS canonical domain, with no trailing slash. This value controls canonical URLs, Open Graph URLs, structured data, `robots.txt`, and the sitemap.
